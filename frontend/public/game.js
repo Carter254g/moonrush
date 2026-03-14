@@ -7,7 +7,16 @@
 // ─────────────────────────────────────────
 //  SOCKET CONNECTION
 // ─────────────────────────────────────────
-const socket = io('https://moonrush.onrender.com', { reconnection: true, reconnectionDelay: 2000 });
+// Use localhost when running locally; otherwise use configured backend URL
+const backendUrl = window.location.hostname === 'localhost' ? window.location.origin : (window.MOONRUSH_BACKEND_URL || 'https://moonrush.onrender.com');
+const socket = io(backendUrl, { reconnection: true, reconnectionDelay: 2000 });
+
+// Game state (declare early to avoid temporal dead zone)
+let phase = 'countdown', curMult = 1.00;
+let trailPts = [], pX = 0, pY = 0, pAng = 0, pAngT = 0;
+let tokens = 2000, streak = 0, bestMult = 0, totalWins = 0, chalWins = 0, likeTapsToday = 0;
+let challenge = 3.0, betActive = false, cashedOut = false, betAmount = 0;
+let hist = [], renewalTimer = null, renewalEnd = null, lastDepletedAt = null;
 
 // Generate or retrieve userId from localStorage
 let userId = localStorage.getItem('moonrush_userId');
@@ -38,6 +47,12 @@ function setConnStatus(online) {
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 let W = 0, H = 0;
+let stars = [];
+function makeStars() {
+  stars = [];
+  for (let i = 0; i < 100; i++)
+    stars.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.3 + .2, p: Math.random() * 6.28, sp: Math.random() * .4 + .1 });
+}
 function resize() {
   W = cv.width = cv.clientWidth;
   H = cv.height = cv.clientHeight;
@@ -45,14 +60,6 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
-
-// Stars
-let stars = [];
-function makeStars() {
-  stars = [];
-  for (let i = 0; i < 100; i++)
-    stars.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.3 + .2, p: Math.random() * 6.28, sp: Math.random() * .4 + .1 });
-}
 
 // ─────────────────────────────────────────
 //  AUDIO ENGINE
@@ -206,18 +213,6 @@ function drawRocket(x, y, ang) {
   ctx.globalAlpha = 1;
 }
 
-// ─────────────────────────────────────────
-//  GAME STATE (client-side mirror)
-// ─────────────────────────────────────────
-let phase = 'countdown';
-let curMult = 1.00;
-let trailPts = [], pX = 0, pY = 0, pAng = 0, pAngT = 0;
-let tokens = 2000, streak = 0, bestMult = 0, totalWins = 0, chalWins = 0, likeTapsToday = 0;
-let challenge = 3.0;
-let betActive = false, cashedOut = false, betAmount = 0;
-let hist = [];
-let renewalTimer = null, renewalEnd = null;
-
 // Challenge system
 function newChallenge() {
   const opts = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0];
@@ -238,6 +233,7 @@ socket.on('player:state', (player) => {
   bestMult = player.bestMult;
   totalWins = player.totalWins;
   chalWins = player.chalWins;
+  lastDepletedAt = player.lastDepletedAt || null;
   updateUI();
 });
 
@@ -305,9 +301,11 @@ socket.on('game:crashed', ({ mult }) => {
   updateUI();
 });
 
-socket.on('bet:placed', ({ amount, tokens: t }) => {
+socket.on('bet:placed', ({ amount, tokens: t, lastDepletedAt: lda }) => {
   betActive = true; cashedOut = false; betAmount = amount;
-  tokens = t; updateUI();
+  tokens = t;
+  if (lda) lastDepletedAt = lda;
+  updateUI();
 });
 
 socket.on('bet:won', ({ amount, mult, winAmount, tokens: t, streak: s }) => {
@@ -318,7 +316,7 @@ socket.on('bet:won', ({ amount, mult, winAmount, tokens: t, streak: s }) => {
   if (mult >= challenge) { chalWins++; document.getElementById('chal-badge').textContent = 'Beaten ✅'; document.getElementById('chal-badge').className = 'chal-badge won'; }
   playWinSound(); spawnEmoji('💰'); spawnEmoji('🎉');
   document.getElementById('fa-m').textContent = '🎉 Cashed out at ' + mult.toFixed(2) + 'x!';
-  document.getElementById('fa-s').textContent = '+' + winAmount + ' tokens';
+  document.getElementById('fa-s').textContent = '+' + winAmount + ' stars';
   addHist(mult, true);
   updateUI();
 });
@@ -342,7 +340,7 @@ socket.on('tokens:update', ({ tokens: t, source, amount }) => {
 
 // ── TikTok Live events
 socket.on('tiktok:gift', (data) => {
-  showGiftBanner(`🎁 @${data.username} sent ${data.giftName}! +${data.tokenReward} tokens`);
+  showGiftBanner(`🎁 @${data.username} sent ${data.giftName}! +${data.tokenReward} stars`);
   addGifterBadge(`@${data.username}`, data.giftName);
   spawnEmoji('🎁'); spawnEmoji('🔥');
   playGiftSound();
@@ -365,8 +363,18 @@ socket.on('tiktok:follow', (data) => {
   addChatMessage(data.username, 'just followed! ❤️');
 });
 
+socket.on('tiktok:connected', () => {
+  const btn = document.getElementById('connect-live-btn');
+  if (btn) { btn.textContent = '✅ Live'; btn.disabled = true; btn.style.background = 'rgba(34,197,94,.3)'; }
+});
+
+socket.on('tiktok:error', ({ message }) => {
+  const btn = document.getElementById('connect-live-btn');
+  if (btn) { btn.disabled = false; btn.textContent = '📡 Connect Live'; }
+});
+
 socket.on('gift:announce', ({ username, giftName, tokenReward }) => {
-  showGiftBanner(`🎁 @${username} sent ${giftName}! +${tokenReward} tokens`);
+  showGiftBanner(`🎁 @${username} sent ${giftName}! +${tokenReward} stars`);
 });
 
 // ─────────────────────────────────────────
@@ -410,7 +418,31 @@ function tapLike() {
 }
 
 function requestGift() {
-  alert('Tell your viewers:\n\n"Send a gift to get me 100 tokens!\nEvery gift helps me keep flying! 🚀🎁"');
+  alert('Tell your viewers:\n\n"Send a gift to give me stars!\nEvery gift helps me keep flying! 🚀🎁\n(Free fun only — no real money)"');
+}
+
+function connectTikTokLive() {
+  const apiUrl = (window.MOONRUSH_BACKEND_URL || window.location.origin) + '/api/tiktok/connect';
+  const tiktokUser = username.replace(/^@/, '');
+  if (!tiktokUser || tiktokUser === 'player') {
+    alert('Enter your TikTok username first (refresh and type it when prompted).');
+    return;
+  }
+  const btn = document.getElementById('connect-live-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Connecting...'; }
+  fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: tiktokUser, userId })
+  })
+    .then(r => r.json())
+    .then(() => {
+      // Wait for tiktok:connected socket event for success; tiktok:error will reset button
+    })
+    .catch(err => {
+      if (btn) { btn.disabled = false; btn.textContent = '📡 Connect Live'; }
+      alert('Connection failed. Make sure you are LIVE on TikTok first, then try again.\n\n' + err.message);
+    });
 }
 
 function dismissCrash() {
@@ -418,7 +450,7 @@ function dismissCrash() {
 }
 
 function shareResult() {
-  const text = `🚀 MOON RUSH RESULT\n\nRound: ${curMult.toFixed(2)}x\nTokens: ${tokens} 🪙\nStreak: ${streak} 🔥\nBest: ${bestMult.toFixed(2)}x\nChallenges: ${chalWins} 🎯\n\n▶️ Play Moon Rush FREE on TikTok Live!\n#MoonRush #TikTokLive #Kenya #Aviator`;
+  const text = `🚀 MOON RUSH RESULT\n\nRound: ${curMult.toFixed(2)}x\nStars: ${tokens} ⭐\nStreak: ${streak} 🔥\nBest: ${bestMult.toFixed(2)}x\nChallenges: ${chalWins} 🎯\n\n▶️ Free arcade game on TikTok Live! (No gambling)\n#MoonRush #TikTokLive #Kenya #FreeGame`;
   if (navigator.share) {
     navigator.share({ title: 'Moon Rush 🚀', text });
   } else {
@@ -459,12 +491,13 @@ function checkBroke() {
 
 function startRenewalCountdown() {
   if (renewalTimer) return;
-  renewalEnd = Date.now() + 24 * 60 * 60 * 1000;
+  const depletedAt = lastDepletedAt || Date.now(); // use server time if available
+  renewalEnd = depletedAt + 24 * 60 * 60 * 1000;   // 24h from when they hit 0
   renewalTimer = setInterval(() => {
     let left = renewalEnd - Date.now();
     if (left <= 0) {
       clearInterval(renewalTimer); renewalTimer = null;
-      tokens = 2000; updateUI();
+      socket.emit('player:join', { userId, username }); // refresh from server (renewal happens there)
       document.getElementById('broke').classList.remove('show');
       return;
     }
@@ -511,7 +544,7 @@ function addChatMessage(username, comment) {
 }
 
 // ─────────────────────────────────────────
-//  CANVAS RENDER LOOP
+//  CANVAS RENDER LOOP (deferred to avoid init order issues)
 // ─────────────────────────────────────────
 requestAnimationFrame(function loop(now) {
   requestAnimationFrame(loop);
@@ -578,7 +611,7 @@ requestAnimationFrame(function loop(now) {
       ctx.font = `600 11px system-ui,sans-serif`;
       let cd = curMult >= challenge;
       ctx.fillStyle = cd ? '#22c55e' : 'rgba(255,215,0,.5)';
-      ctx.fillText(cd ? '✅ Challenge done! Cash out!' : '🎯 Challenge: ' + challenge.toFixed(2) + 'x', W / 2, H * .36 + Math.round(H * .16));
+      ctx.fillText(cd ? '✅ Challenge done! Land now!' : '🎯 Challenge: ' + challenge.toFixed(2) + 'x', W / 2, H * .36 + Math.round(H * .16));
     }
     ctx.restore();
   }

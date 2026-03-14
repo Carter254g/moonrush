@@ -7,9 +7,9 @@
 
 ## 🎮 What is Moon Rush?
 
-Moon Rush is a free-to-play rocket crash game for TikTok LIVE.
-Viewers earn tokens through likes and gifts to keep the rocket flying.
-**No real money. No purchases. 100% free.**
+Moon Rush is a free arcade-style rocket game for TikTok LIVE.
+**FOR ENTERTAINMENT ONLY** — No real money. No purchases. No gambling. 100% free.
+Viewers earn stars through likes and gifts to keep the rocket flying.
 
 ---
 
@@ -69,21 +69,21 @@ Short version:
 
 Moon Rush supports TikTok-style PK Battles:
 - Two streamers play on a split screen simultaneously
-- Each rocket is independent — separate crash points, separate cashouts
+- Each rocket is independent — separate crash points, separate landings
 - Battle timer counts down (1, 3, 5 or 10 minutes)
-- Whoever **loses the most tokens** during the battle = LOSER
+- Whoever **loses the most stars** during the battle = LOSER
 - Loser must do a random punishment challenge on camera
 
 ---
 
 ## 🛡️ Why This Is TikTok Compliant
 
-- Tokens are 100% free — never purchaseable
-- Tokens have zero monetary value
+- **Stars are 100% free** — never purchaseable, zero monetary value
+- **No gambling** — arcade-style fun only, no real money involved
 - TikTok gifts are voluntary creator support (same as any Live)
 - Gifters receive nothing back — no pay-to-win
 - 24hr auto-renew ensures everyone can always play
-- This is an interactive Live game, not simulated gambling
+- Clear "FOR ENTERTAINMENT ONLY" disclaimers throughout the app
 
 ---
 

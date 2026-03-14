@@ -6,6 +6,8 @@
  * ╚══════════════════════════════════════════════╝
  */
 
+require('dotenv').config();
+
 const express    = require('express');
 const http       = require('http');
 const { Server } = require('socket.io');
@@ -17,13 +19,20 @@ const { WebcastPushConnection } = require('tiktok-live-connector');
 // ─────────────────────────────────────────
 //  FIREBASE INIT
 // ─────────────────────────────────────────
-admin.initializeApp({
-  credential: admin.credential.cert({
+const fs = require('fs');
+const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
+let credential;
+
+if (fs.existsSync(serviceAccountPath)) {
+  credential = admin.credential.cert(require(serviceAccountPath));
+} else {
+  credential = admin.credential.cert({
     projectId:    process.env.FIREBASE_PROJECT_ID,
     privateKey:   process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     clientEmail:  process.env.FIREBASE_CLIENT_EMAIL,
-  })
-});
+  });
+}
+admin.initializeApp({ credential });
 const db = admin.firestore();
 
 // ─────────────────────────────────────────
@@ -78,10 +87,18 @@ async function savePlayer(player) {
 }
 
 async function checkAndRenew(player) {
-  const hoursSince = (Date.now() - player.lastRenewal) / 3600000;
-  if (hoursSince >= RENEWAL_HOURS && player.tokens <= 0) {
-    player.tokens      = MAX_TOKENS;
-    player.lastRenewal = Date.now();
+  // Only renew when tokens are exactly 0, and 24h have passed since they ran out
+  if (player.tokens > 0) return false;
+  if (!player.lastDepletedAt) {
+    player.lastDepletedAt = Date.now(); // start 24h clock for existing players at 0
+    await savePlayer(player);
+    return false;
+  }
+  const hoursSinceDepleted = (Date.now() - player.lastDepletedAt) / 3600000;
+  if (hoursSinceDepleted >= RENEWAL_HOURS) {
+    player.tokens        = MAX_TOKENS;
+    player.lastRenewal  = Date.now();
+    player.lastDepletedAt = null;
     await savePlayer(player);
     return true;
   }
@@ -342,11 +359,11 @@ app.get('/api/leaderboard', async (req, res) => {
   res.json(board);
 });
 
-// Connect to TikTok Live
+// Connect to TikTok Live (userId = streamer's game userId, so they receive gift stars)
 app.post('/api/tiktok/connect', (req, res) => {
-  const { username } = req.body;
+  const { username, userId } = req.body;
   if (!username) return res.status(400).json({ error: 'Username required' });
-  connectTikTok(username);
+  connectTikTok(username, userId || null);
   res.json({ message: `Connecting to @${username}` });
 });
 
@@ -368,15 +385,18 @@ io.on('connection', (socket) => {
 
   // Place bet
   socket.on('bet:place', async ({ userId, amount, autoCashout }) => {
-    if (gamePhase !== 'countdown' && gamePhase !== 'flying') return socket.emit('bet:error', { message: 'Betting closed' });
+    if (gamePhase !== 'countdown' && gamePhase !== 'flying') return socket.emit('bet:error', { message: 'Launch window closed' });
     const player = await getPlayer(userId);
     if (!player)       return socket.emit('bet:error', { message: 'Player not found' });
-    if (amount < 10)   return socket.emit('bet:error', { message: 'Minimum bet is 10 tokens' });
-    if (amount > player.tokens) return socket.emit('bet:error', { message: 'Not enough tokens' });
+    if (amount < 10)   return socket.emit('bet:error', { message: 'Minimum launch is 10 stars' });
+    if (amount > player.tokens) return socket.emit('bet:error', { message: 'Not enough stars' });
     player.tokens -= amount;
+    if (player.tokens <= 0) {
+      player.lastDepletedAt = Date.now(); // start 24h renewal clock
+    }
     await savePlayer(player);
     activeBets.set(userId, { userId, amount, autoCashout: autoCashout || null, cashedOut: false });
-    socket.emit('bet:placed', { amount, tokens: player.tokens });
+    socket.emit('bet:placed', { amount, tokens: player.tokens, lastDepletedAt: player.lastDepletedAt || null });
   });
 
   // Cash out
@@ -445,8 +465,10 @@ io.on('connection', (socket) => {
 //  TIKTOK LIVE CONNECTOR
 // ─────────────────────────────────────────
 let tiktokConn = null;
+let streamerUserId = null;  // who receives stars from gifts/likes
 
-function connectTikTok(username) {
+function connectTikTok(username, userId = null) {
+  streamerUserId = userId;  // store so gifts credit the streamer
   if (tiktokConn) tiktokConn.disconnect();
   tiktokConn = new WebcastPushConnection(username, {
     processInitialData:       false,
@@ -465,28 +487,49 @@ function connectTikTok(username) {
       io.emit('tiktok:error', { message: err.message });
     });
 
-  // ── LIKES → show reactions, 0.5 token per tap handled client-side
-  tiktokConn.on('like', data => {
+  // ── LIKES → show reactions + credit streamer (0.5 stars per like, buffered)
+  tiktokConn.on('like', async data => {
     io.emit('tiktok:like', {
       username:    data.uniqueId,
       likeCount:   data.likeCount,
       totalLikes:  data.totalLikeCount
     });
+    if (streamerUserId) {
+      const player = await getPlayer(streamerUserId);
+      if (player) {
+        player.likeBuffer = (player.likeBuffer || 0) + LIKE_VALUE;
+        if (player.likeBuffer >= 1) {
+          const whole = Math.floor(player.likeBuffer);
+          player.tokens += whole;
+          player.likeBuffer -= whole;
+          await savePlayer(player);
+          io.to(streamerUserId).emit('tokens:update', { tokens: player.tokens, likeBuffer: player.likeBuffer, source: 'like' });
+        }
+      }
+    }
   });
 
-  // ── GIFTS → coins = tokens exactly
-  tiktokConn.on('gift', data => {
+  // ── GIFTS → coins = stars, credit streamer
+  tiktokConn.on('gift', async data => {
     if (data.giftType === 1 && !data.repeatEnd) return; // skip mid-combo
     const coins = data.diamondCount * (data.repeatCount || 1);
-    console.log(`🎁 ${data.giftName} x${data.repeatCount} from @${data.uniqueId} = ${coins} tokens`);
+    console.log(`🎁 ${data.giftName} x${data.repeatCount} from @${data.uniqueId} = ${coins} stars`);
     io.emit('tiktok:gift', {
       username:    data.uniqueId,
       giftName:    data.giftName,
       giftEmoji:   data.giftPictureUrl,
       coins,
-      tokenReward: coins,   // 1 coin = 1 token
+      tokenReward: coins,
       repeatCount: data.repeatCount || 1,
     });
+    if (streamerUserId) {
+      const player = await getPlayer(streamerUserId);
+      if (player) {
+        player.tokens += coins;
+        await savePlayer(player);
+        io.to(streamerUserId).emit('tokens:update', { tokens: player.tokens, source: 'gift', amount: coins });
+      }
+    }
   });
 
   // ── CHAT
