@@ -204,6 +204,11 @@ function processCrash() {
   roundHistory.unshift({ mult: currentMult, roundNumber, ts: Date.now() });
   if (roundHistory.length > 50) roundHistory.pop();
   io.emit('game:crashed', { mult: currentMult, roundNumber });
+  // Send round summary to each invite room so friends can compare
+  for (const [roomCode] of inviteRooms) {
+    const summary = buildInviteRoundSummary(roomCode, currentMult);
+    if (summary) io.to(`invite_${roomCode}`).emit('invite:round_summary', summary);
+  }
   setTimeout(startCountdown, 3000);
 }
 
@@ -300,6 +305,32 @@ function endPKBattle(roomId) {
 }
 
 // ─────────────────────────────────────────
+//  INVITE ROOMS (play with friends via link — no TikTok needed)
+// ─────────────────────────────────────────
+const INVITE_ROOM_MAX = 10;
+const inviteRooms    = new Map(); // roomCode → { hostId, members: [{ userId, username }], createdAt }
+const userToInviteRoom = new Map(); // userId → roomCode
+
+function genInviteCode() {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return inviteRooms.has(code) ? genInviteCode() : code;
+}
+
+function buildInviteRoundSummary(roomCode, crashMult) {
+  const room = inviteRooms.get(roomCode);
+  if (!room) return null;
+  const results = room.members.map(({ userId, username }) => {
+    const bet = activeBets.get(userId);
+    if (!bet) return { userId, username, outcome: 'no_bet' };
+    if (bet.cashedOut) return { userId, username, outcome: 'cashed_out', mult: bet.cashoutMult, winAmount: Math.round(bet.amount * bet.cashoutMult) };
+    return { userId, username, outcome: 'crashed', mult: crashMult };
+  });
+  return { roomCode, crashMult, results };
+}
+
+// ─────────────────────────────────────────
 //  REST API
 // ─────────────────────────────────────────
 // Register new player
@@ -373,14 +404,45 @@ app.post('/api/tiktok/connect', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`🔌 Connected: ${socket.id}`);
 
-  // Join game
-  socket.on('player:join', async ({ userId, username }) => {
+  // Join game (optional: inviteCode to join a friend's room)
+  socket.on('player:join', async ({ userId, username, inviteCode }) => {
+    socket.userId = userId;
     socket.join(userId);
     let player = await getPlayer(userId);
     if (!player) player = await createPlayer(userId, username, 'viewer');
     const renewed = await checkAndRenew(player);
     socket.emit('player:state', { ...player, renewed });
     socket.emit('game:state', { phase: gamePhase, mult: currentMult, countdown: countdownVal, roundNumber, history: roundHistory.slice(0, 10) });
+
+    const code = (inviteCode || '').toLowerCase().trim();
+    if (code && inviteRooms.has(code)) {
+      const room = inviteRooms.get(code);
+      if (room.members.length >= INVITE_ROOM_MAX) return;
+      const already = room.members.some(m => m.userId === userId);
+      if (!already) {
+        room.members.push({ userId, username });
+        userToInviteRoom.set(userId, code);
+        socket.join(`invite_${code}`);
+        const members = room.members.map(m => ({ userId: m.userId, username: m.username }));
+        socket.emit('invite:joined', { roomCode: code, members });
+        socket.to(`invite_${code}`).emit('invite:member_joined', { userId, username, members });
+      }
+    }
+  });
+
+  // Create invite room and get shareable link
+  socket.on('invite:create', async ({ userId, username }) => {
+    const code = genInviteCode();
+    inviteRooms.set(code, {
+      hostId: userId,
+      members: [{ userId, username }],
+      createdAt: Date.now(),
+    });
+    userToInviteRoom.set(userId, code);
+    socket.join(`invite_${code}`);
+    const baseUrl = process.env.MOONRUSH_FRONTEND_URL || 'https://moonrush.onrender.com';
+    const inviteUrl = `${baseUrl}?invite=${code}`;
+    socket.emit('invite:created', { roomCode: code, inviteUrl, members: [{ userId, username }] });
   });
 
   // Change username (wrong name entered)
@@ -466,7 +528,20 @@ io.on('connection', (socket) => {
     if (side === 'right') { room.p2Tokens += coins; room.p2Gifts++; }
   });
 
-  socket.on('disconnect', () => console.log(`❌ Disconnected: ${socket.id}`));
+  socket.on('disconnect', () => {
+    const uid = socket.userId;
+    if (uid && userToInviteRoom.has(uid)) {
+      const code = userToInviteRoom.get(uid);
+      const room = inviteRooms.get(code);
+      if (room) {
+        room.members = room.members.filter(m => m.userId !== uid);
+        userToInviteRoom.delete(uid);
+        socket.to(`invite_${code}`).emit('invite:member_left', { userId: uid, members: room.members });
+        if (room.members.length === 0) inviteRooms.delete(code);
+      }
+    }
+    console.log(`❌ Disconnected: ${socket.id}`);
+  });
 });
 
 // ─────────────────────────────────────────

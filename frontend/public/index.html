@@ -144,6 +144,18 @@
     /* Disclaimer banner */
     #disclaimer{background:linear-gradient(90deg,#1a3a1a,#0d2d0d);border-bottom:1px solid rgba(34,197,94,.3);padding:6px 12px;text-align:center;font-size:10px;color:#86efac;letter-spacing:.5px;}
     #disclaimer strong{color:#22c55e;}
+    /* Invite strip & panel */
+    .invite-strip{font-size:10px;color:rgba(255,215,0,.9);padding:2px 14px 4px;}
+    .invite-strip.hide{display:none;}
+    .invite-panel{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:9999;opacity:0;visibility:hidden;transition:opacity .2s, visibility .2s;}
+    .invite-panel.show{opacity:1;visibility:visible;}
+    .invite-panel-inner{background:#111;border:1px solid #333;border-radius:14px;padding:20px;max-width:340px;width:90%;}
+    .invite-panel-title{font-size:16px;font-weight:800;margin-bottom:8px;}
+    .invite-panel-sub{font-size:11px;color:#888;margin-bottom:14px;line-height:1.5;}
+    .invite-link-row{display:flex;gap:8px;margin-bottom:12px;}
+    .invite-link-input{flex:1;background:#0a0a0a;border:1px solid #333;border-radius:8px;padding:10px 12px;font-size:12px;color:#FFD700;}
+    .invite-copy-btn{padding:10px 16px;border-radius:8px;font-weight:700;background:linear-gradient(135deg,#FFD700,#ff8c00);color:#000;border:none;cursor:pointer;}
+    .invite-close-btn{width:100%;padding:10px;border-radius:8px;font-weight:700;background:#222;color:#ccc;border:1px solid #333;cursor:pointer;}
   </style>
 </head>
 <body>
@@ -158,7 +170,8 @@
           <span id="uname" onclick="changeUsername()" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px" title="Tap to change name">@moonrush_ke</span>
           <span id="live-badge">LIVE</span>
         </div>
-        <div id="viewer-line">🔥 <span id="streak-val">0</span> streak &nbsp;|&nbsp; 👁 <span id="viewer-count">0</span> watching &nbsp; <button id="connect-live-btn" onclick="connectTikTokLive()" style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(34,197,94,.2);color:#22c55e;border:1px solid rgba(34,197,94,.4);cursor:pointer;">📡 Connect Live</button></div>
+        <div id="viewer-line">🔥 <span id="streak-val">0</span> streak &nbsp;|&nbsp; 👁 <span id="viewer-count">0</span> watching &nbsp; <button id="connect-live-btn" onclick="connectTikTokLive()" style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(34,197,94,.2);color:#22c55e;border:1px solid rgba(34,197,94,.4);cursor:pointer;">📡 Connect Live</button> &nbsp; <button id="invite-friend-btn" onclick="createInvite()" style="font-size:9px;padding:2px 6px;border-radius:6px;background:rgba(255,215,0,.2);color:#FFD700;border:1px solid rgba(255,215,0,.4);cursor:pointer;">🔗 Invite friend</button></div>
+    <div id="invite-strip" class="invite-strip hide"><span id="invite-members"></span></div>
       </div>
     </div>
     <div>
@@ -275,6 +288,19 @@
     <div class="stat"><div class="stat-v" id="sv-chals">0</div><div class="stat-l">Challenges</div></div>
   </div>
   <div id="hist-row"></div>
+</div>
+
+<!-- Invite panel: copy link to compete with friends (no TikTok needed) -->
+<div id="invite-panel" class="invite-panel">
+  <div class="invite-panel-inner">
+    <div class="invite-panel-title">🔗 Invite a friend to compete</div>
+    <p class="invite-panel-sub">Share this link. They play the same rounds and you’ll see who landed or crashed.</p>
+    <div class="invite-link-row">
+      <input type="text" id="invite-link-input" readonly class="invite-link-input"/>
+      <button type="button" class="invite-copy-btn" onclick="copyInviteLink()">Copy</button>
+    </div>
+    <button type="button" class="invite-close-btn" onclick="showInvitePanel(false)">Done</button>
+  </div>
 </div>
 
 <div id="conn-status" class="offline">⚫ Connecting...</div>

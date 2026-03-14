@@ -11,12 +11,17 @@
 const backendUrl = window.location.hostname === 'localhost' ? window.location.origin : (window.MOONRUSH_BACKEND_URL || 'https://moonrush.onrender.com');
 const socket = io(backendUrl, { reconnection: true, reconnectionDelay: 2000 });
 
+// Invite link: ?invite=CODE or ?room=CODE (so friends can compete without TikTok)
+const urlParams = new URLSearchParams(window.location.search);
+const inviteCodeFromUrl = (urlParams.get('invite') || urlParams.get('room') || '').trim().toLowerCase() || null;
+
 // Game state (declare early to avoid temporal dead zone)
 let phase = 'countdown', curMult = 1.00;
 let trailPts = [], pX = 0, pY = 0, pAng = 0, pAngT = 0;
 let tokens = 2000, streak = 0, bestMult = 0, totalWins = 0, chalWins = 0, likeTapsToday = 0;
 let challenge = 3.0, betActive = false, cashedOut = false, betAmount = 0;
 let hist = [], renewalTimer = null, renewalEnd = null, lastDepletedAt = null;
+let inviteRoomCode = null, inviteMembers = [], inviteUrl = null; // invite link competition
 
 // Generate or retrieve userId from localStorage
 let userId = localStorage.getItem('moonrush_userId');
@@ -42,7 +47,7 @@ function changeUsername() {
 
 socket.on('connect', () => {
   setConnStatus(true);
-  socket.emit('player:join', { userId, username });
+  socket.emit('player:join', { userId, username, inviteCode: inviteRoomCode || inviteCodeFromUrl });
 });
 socket.on('disconnect', () => setConnStatus(false));
 
@@ -255,6 +260,26 @@ socket.on('game:state', (state) => {
     hist = state.history.map(r => ({ m: r.mult.toFixed(2), w: false }));
     renderHistory();
   }
+  // Sync UI and rocket so flight is visible even when joining mid-round
+  if (phase === 'countdown') {
+    pX = SX(); pY = SY(); pAng = 0; trailPts = [];
+    document.getElementById('cd').classList.remove('hide');
+    document.getElementById('fa').classList.remove('show');
+    if (state.countdown != null) document.getElementById('cd-n').textContent = state.countdown;
+    document.getElementById('place-btn').disabled = false;
+    document.getElementById('co-btn').disabled = true;
+  } else if (phase === 'flying') {
+    let t = mToT(curMult);
+    let bp = bPt(t);
+    pX = bp.x; pY = bp.y; pAngT = bAng(t); pAng = pAngT;
+    trailPts = [{ x: pX, y: pY }];
+    document.getElementById('cd').classList.add('hide');
+    document.getElementById('fa').classList.remove('show');
+    document.getElementById('place-btn').disabled = true;
+    if (betActive) document.getElementById('co-btn').disabled = false;
+    startReactions();
+    startEngine();
+  }
 });
 
 socket.on('game:countdown', ({ val }) => {
@@ -272,7 +297,11 @@ socket.on('game:countdown', ({ val }) => {
 
 socket.on('game:flying', () => {
   phase = 'flying';
+  // Ensure rocket starts at launch position (game:countdown already set pX, pY; resize may have changed W/H)
+  pX = SX(); pY = SY(); pAng = 0;
+  trailPts = [{ x: pX, y: pY }];
   document.getElementById('cd').classList.add('hide');
+  document.getElementById('fa').classList.remove('show');
   startReactions(); startEngine();
   if (betActive) document.getElementById('co-btn').disabled = false;
   document.getElementById('place-btn').disabled = true;
@@ -339,6 +368,39 @@ socket.on('bet:lost', ({ amount, mult }) => {
 
 socket.on('bet:error', ({ message }) => {
   alert(message);
+});
+
+// ── Invite link (compete with friends without TikTok)
+socket.on('invite:created', ({ roomCode, inviteUrl: url, members }) => {
+  inviteRoomCode = roomCode;
+  inviteUrl = url;
+  inviteMembers = members || [];
+  showInvitePanel(true);
+  renderInviteMembers();
+});
+socket.on('invite:joined', ({ roomCode, members }) => {
+  inviteRoomCode = roomCode;
+  inviteMembers = members || [];
+  renderInviteMembers();
+  if (document.getElementById('invite-strip')) document.getElementById('invite-strip').classList.remove('hide');
+});
+socket.on('invite:member_joined', ({ userId, username, members }) => {
+  inviteMembers = members || [];
+  renderInviteMembers();
+  showGiftBanner(`👋 ${username} joined your group!`);
+});
+socket.on('invite:member_left', ({ members }) => {
+  inviteMembers = members || [];
+  renderInviteMembers();
+  if (inviteMembers.length <= 1) document.getElementById('invite-strip')?.classList.add('hide');
+});
+socket.on('invite:round_summary', ({ crashMult, results }) => {
+  const lines = (results || []).map(r => {
+    if (r.outcome === 'no_bet') return `${r.username} — no bet`;
+    if (r.outcome === 'cashed_out') return `${r.username} landed at ${r.mult.toFixed(2)}x (+${r.winAmount})`;
+    return `${r.username} crashed at ${crashMult.toFixed(2)}x`;
+  });
+  showGiftBanner('🏆 Group: ' + lines.join(' · '));
 });
 
 socket.on('tokens:update', ({ tokens: t, source, amount }) => {
@@ -508,7 +570,7 @@ function startRenewalCountdown() {
     let left = renewalEnd - Date.now();
     if (left <= 0) {
       clearInterval(renewalTimer); renewalTimer = null;
-      socket.emit('player:join', { userId, username }); // refresh from server (renewal happens there)
+      socket.emit('player:join', { userId, username, inviteCode: inviteRoomCode || inviteCodeFromUrl });
       document.getElementById('broke').classList.remove('show');
       return;
     }
@@ -537,6 +599,36 @@ function showGiftBanner(text) {
   b._t = setTimeout(() => b.style.display = 'none', 3500);
 }
 
+function showInvitePanel(show) {
+  const panel = document.getElementById('invite-panel');
+  if (!panel) return;
+  panel.classList.toggle('show', !!show);
+  if (show && inviteUrl) {
+    const input = document.getElementById('invite-link-input');
+    if (input) input.value = inviteUrl;
+  }
+}
+
+function renderInviteMembers() {
+  const el = document.getElementById('invite-members');
+  if (!el) return;
+  if (inviteMembers.length === 0) { el.textContent = ''; return; }
+  el.textContent = 'Playing with: ' + inviteMembers.map(m => m.username).join(', ');
+}
+
+function copyInviteLink() {
+  if (!inviteUrl) return;
+  navigator.clipboard.writeText(inviteUrl).then(() => {
+    showGiftBanner('🔗 Invite link copied! Share with friends.');
+    showInvitePanel(false);
+  }).catch(() => { prompt('Copy this link:', inviteUrl); });
+}
+
+function createInvite() {
+  if (inviteRoomCode) { showInvitePanel(true); return; }
+  socket.emit('invite:create', { userId, username });
+}
+
 function addGifterBadge(username, gift) {
   let bar = document.getElementById('gifters-bar');
   let el = document.createElement('div'); el.className = 'gifter';
@@ -559,6 +651,8 @@ function addChatMessage(username, comment) {
 // ─────────────────────────────────────────
 requestAnimationFrame(function loop(now) {
   requestAnimationFrame(loop);
+  if (W === 0 || H === 0) resize();
+  if (W === 0 || H === 0) return;
   ctx.clearRect(0, 0, W, H);
 
   // BG
