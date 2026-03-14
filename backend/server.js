@@ -42,9 +42,9 @@ const app    = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  pingInterval: 25000,
-  pingTimeout: 60000,
-  connectTimeout: 30000,
+  pingInterval: 20000,
+  pingTimeout: 55000,
+  connectTimeout: 45000,
   transports: ['polling', 'websocket'],
 });
 

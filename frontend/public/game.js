@@ -11,11 +11,12 @@
 const backendUrl = window.MOONRUSH_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin);
 const socket = io(backendUrl, {
   reconnection: true,
-  reconnectionDelay: 2000,
-  reconnectionDelayMax: 10000,
-  reconnectionAttempts: 20,
-  timeout: 30000,
+  reconnectionDelay: 1500,
+  reconnectionDelayMax: 8000,
+  reconnectionAttempts: Infinity,
+  timeout: 45000,
   transports: ['polling', 'websocket'],
+  autoConnect: true,
 });
 
 // Invite link: ?invite=CODE or ?room=CODE (so friends can compete without TikTok)
@@ -56,18 +57,19 @@ socket.on('connect', () => {
   setConnStatus(true);
   socket.emit('player:join', { userId, username, inviteCode: inviteRoomCode || inviteCodeFromUrl });
 });
-socket.on('disconnect', (reason) => {
+socket.on('disconnect', () => {
   setConnStatus(false);
-  if (reason === 'io server disconnect') setConnStatus(false, 'Server disconnected');
 });
 socket.on('connect_error', () => {
-  setConnStatus(false, 'Connecting...');
+  setConnStatus(false);
 });
 
-function setConnStatus(online, message) {
+function setConnStatus(online) {
   const el = document.getElementById('conn-status');
-  el.textContent = online ? '🟢 Live' : (message || '🔴 Reconnecting...');
+  if (!el) return;
+  el.textContent = online ? '🟢 Live' : 'Connecting…';
   el.className = online ? 'online' : 'offline';
+  el.setAttribute('aria-live', 'polite');
 }
 
 // ─────────────────────────────────────────
