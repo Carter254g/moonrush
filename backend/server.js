@@ -383,6 +383,14 @@ io.on('connection', (socket) => {
     socket.emit('game:state', { phase: gamePhase, mult: currentMult, countdown: countdownVal, roundNumber, history: roundHistory.slice(0, 10) });
   });
 
+  // Change username (wrong name entered)
+  socket.on('player:updateUsername', async ({ userId, username }) => {
+    const player = await getPlayer(userId);
+    if (!player) return;
+    player.username = username;
+    await savePlayer(player);
+  });
+
   // Place bet
   socket.on('bet:place', async ({ userId, amount, autoCashout }) => {
     if (gamePhase !== 'countdown' && gamePhase !== 'flying') return socket.emit('bet:error', { message: 'Launch window closed' });

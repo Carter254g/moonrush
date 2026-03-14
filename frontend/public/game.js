@@ -24,10 +24,21 @@ if (!userId) {
   userId = 'user_' + Math.random().toString(36).substr(2, 9);
   localStorage.setItem('moonrush_userId', userId);
 }
-const username = localStorage.getItem('moonrush_username') || prompt('Enter your TikTok username (e.g. @yourname):') || '@player';
+let username = localStorage.getItem('moonrush_username') || prompt('Enter your TikTok username (e.g. @yourname):') || '@player';
 localStorage.setItem('moonrush_username', username);
 document.getElementById('uname').textContent = username;
 document.getElementById('avatar').textContent = username.charAt(username.startsWith('@') ? 1 : 0).toUpperCase();
+
+function changeUsername() {
+  const newName = prompt('Change display name (e.g. @yourname):', username);
+  if (newName == null || newName.trim() === '') return;
+  username = newName.trim();
+  if (!username.startsWith('@')) username = '@' + username;
+  localStorage.setItem('moonrush_username', username);
+  document.getElementById('uname').textContent = username;
+  document.getElementById('avatar').textContent = username.charAt(1).toUpperCase();
+  socket.emit('player:updateUsername', { userId, username });
+}
 
 socket.on('connect', () => {
   setConnStatus(true);
