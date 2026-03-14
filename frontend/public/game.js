@@ -7,9 +7,16 @@
 // ─────────────────────────────────────────
 //  SOCKET CONNECTION
 // ─────────────────────────────────────────
-// Use localhost when running locally; otherwise use configured backend URL
-const backendUrl = window.location.hostname === 'localhost' ? window.location.origin : (window.MOONRUSH_BACKEND_URL || 'https://moonrush.onrender.com');
-const socket = io(backendUrl, { reconnection: true, reconnectionDelay: 2000 });
+// Backend URL: explicit override, or same origin in production, or localhost:3001 when dev
+const backendUrl = window.MOONRUSH_BACKEND_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3001' : window.location.origin);
+const socket = io(backendUrl, {
+  reconnection: true,
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 10000,
+  reconnectionAttempts: 20,
+  timeout: 30000,
+  transports: ['polling', 'websocket'],
+});
 
 // Invite link: ?invite=CODE or ?room=CODE (so friends can compete without TikTok)
 const urlParams = new URLSearchParams(window.location.search);
@@ -49,11 +56,17 @@ socket.on('connect', () => {
   setConnStatus(true);
   socket.emit('player:join', { userId, username, inviteCode: inviteRoomCode || inviteCodeFromUrl });
 });
-socket.on('disconnect', () => setConnStatus(false));
+socket.on('disconnect', (reason) => {
+  setConnStatus(false);
+  if (reason === 'io server disconnect') setConnStatus(false, 'Server disconnected');
+});
+socket.on('connect_error', () => {
+  setConnStatus(false, 'Connecting...');
+});
 
-function setConnStatus(online) {
+function setConnStatus(online, message) {
   const el = document.getElementById('conn-status');
-  el.textContent = online ? '🟢 Live' : '🔴 Reconnecting...';
+  el.textContent = online ? '🟢 Live' : (message || '🔴 Reconnecting...');
   el.className = online ? 'online' : 'offline';
 }
 
@@ -345,11 +358,13 @@ socket.on('bet:placed', ({ amount, tokens: t, lastDepletedAt: lda }) => {
   betActive = true; cashedOut = false; betAmount = amount;
   tokens = t;
   if (lda) lastDepletedAt = lda;
+  if (phase === 'flying') document.getElementById('co-btn').disabled = false;
   updateUI();
 });
 
 socket.on('bet:won', ({ amount, mult, winAmount, tokens: t, streak: s }) => {
   cashedOut = true;
+  document.getElementById('co-btn').disabled = true;
   tokens = t; streak = s;
   if (mult > bestMult) bestMult = mult;
   totalWins++;
@@ -368,6 +383,7 @@ socket.on('bet:lost', ({ amount, mult }) => {
 
 socket.on('bet:error', ({ message }) => {
   alert(message);
+  if (phase === 'countdown') document.getElementById('place-btn').disabled = false;
 });
 
 // ── Invite link (compete with friends without TikTok)
@@ -467,18 +483,21 @@ function updPreview() {
 }
 
 function placeBet() {
-  if (phase === 'flying') return;
+  const placeBtn = document.getElementById('place-btn');
+  if (placeBtn.disabled || phase === 'flying') return;
   initAudio();
   let amount = parseInt(document.getElementById('bet-amt').value) || 0;
   if (amount < 10) return;
   if (amount > tokens) { document.getElementById('bet-amt').style.outline = '1px solid #ff4d4d'; setTimeout(() => document.getElementById('bet-amt').style.outline = '', 800); return; }
   let autoCashout = document.getElementById('auto-cb').checked ? (parseFloat(document.getElementById('auto-x').value) || null) : null;
+  placeBtn.disabled = true;
   socket.emit('bet:place', { userId, amount, autoCashout });
-  document.getElementById('place-btn').disabled = true;
 }
 
 function cashOut() {
-  if (phase !== 'flying' || !betActive || cashedOut) return;
+  const coBtn = document.getElementById('co-btn');
+  if (coBtn.disabled || phase !== 'flying' || !betActive || cashedOut) return;
+  coBtn.disabled = true;
   socket.emit('bet:cashout', { userId });
 }
 
