@@ -1,0 +1,21 @@
+# Render deployment configuration
+# This file tells Render exactly how to deploy Moon Rush
+
+services:
+  - type: web
+    name: moonrush-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
